@@ -135,9 +135,9 @@ def match(threshold, truths, priors, variances, labels, landms, loc_t, conf_t, l
     # best_truth_overlap 是每个anchors 与 所有GT中重叠度最高的那个GT的重叠度，大部分都是0
     # best_truth_idx 是 每个anchors 对应的GT的idx，如总共有14个人脸，则值域为[0,13]
     best_truth_overlap, best_truth_idx = overlaps.max(0, keepdim=True)  # 每个anchors与哪一个GT bbox的重叠度最高
-    best_truth_idx.squeeze_(0)
+    best_truth_idx.squeeze_(0)  # [16800]
     best_truth_overlap.squeeze_(0)
-    best_prior_idx.squeeze_(1)
+    best_prior_idx.squeeze_(1) # [14]
     best_prior_idx_filter.squeeze_(1)
     best_prior_overlap.squeeze_(1)
     best_truth_overlap.index_fill_(0, best_prior_idx_filter, 2)  # ensure best prior 重叠度设置为2，
