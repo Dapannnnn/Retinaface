@@ -36,7 +36,7 @@ def _crop(image, boxes, labels, landm, img_dim):
         if not flag.any():
             continue
 
-        centers = (boxes[:, :2] + boxes[:, 2:]) / 2
+        centers = (boxes[:, :2] + boxes[:, 2:]) / 2   # txt标签是  xmin ymin width height
         mask_a = np.logical_and(roi[:2] < centers, centers < roi[2:]).all(axis=1)
         boxes_t = boxes[mask_a].copy()
         labels_t = labels[mask_a].copy()
@@ -166,7 +166,7 @@ def _expand(image, boxes, fill, p):
 
 def _mirror(image, boxes, landms):
     _, width, _ = image.shape
-    if random.randrange(2):
+    if random.randrange(2):  # 0.5的概率随机翻转
         image = image[:, ::-1]
         boxes = boxes.copy()
         boxes[:, 0::2] = width - boxes[:, 2::-2]
@@ -218,13 +218,13 @@ class preproc(object):
         boxes = targets[:, :4].copy()
         labels = targets[:, -1].copy()
         landm = targets[:, 4:-1].copy()
-
+        # 裁剪 ， （683, 1024, 3） --> (409, 409, 3)
         image_t, boxes_t, labels_t, landm_t, pad_image_flag = _crop(image, boxes, labels, landm, self.img_dim)
-        image_t = _distort(image_t)
+        image_t = _distort(image_t)  # 色彩扰动
         image_t = _pad_to_square(image_t,self.rgb_means, pad_image_flag)
-        image_t, boxes_t, landm_t = _mirror(image_t, boxes_t, landm_t)
+        image_t, boxes_t, landm_t = _mirror(image_t, boxes_t, landm_t)  # 0.5概率随机翻转
         height, width, _ = image_t.shape
-        image_t = _resize_subtract_mean(image_t, self.img_dim, self.rgb_means)
+        image_t = _resize_subtract_mean(image_t, self.img_dim, self.rgb_means)  # 减均值，实现0均值
         boxes_t[:, 0::2] /= width
         boxes_t[:, 1::2] /= height
 

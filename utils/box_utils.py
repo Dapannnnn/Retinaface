@@ -10,8 +10,8 @@ def point_form(boxes):
     Return:
         boxes: (tensor) Converted xmin, ymin, xmax, ymax form of boxes.
     """
-    return torch.cat((boxes[:, :2] - boxes[:, 2:]/2,     # xmin, ymin
-                     boxes[:, :2] + boxes[:, 2:]/2), 1)  # xmax, ymax
+    return torch.cat((boxes[:, :2] - boxes[:, 2:] / 2,  # xmin, ymin
+                      boxes[:, :2] + boxes[:, 2:] / 2), 1)  # xmax, ymax
 
 
 def center_size(boxes):
@@ -22,7 +22,7 @@ def center_size(boxes):
     Return:
         boxes: (tensor) Converted xmin, ymin, xmax, ymax form of boxes.
     """
-    return torch.cat((boxes[:, 2:] + boxes[:, :2])/2,  # cx, cy
+    return torch.cat((boxes[:, 2:] + boxes[:, :2]) / 2,  # cx, cy
                      boxes[:, 2:] - boxes[:, :2], 1)  # w, h
 
 
@@ -60,10 +60,10 @@ def jaccard(box_a, box_b):
         jaccard overlap: (tensor) Shape: [box_a.size(0), box_b.size(0)]
     """
     inter = intersect(box_a, box_b)
-    area_a = ((box_a[:, 2]-box_a[:, 0]) *
-              (box_a[:, 3]-box_a[:, 1])).unsqueeze(1).expand_as(inter)  # [A,B]
-    area_b = ((box_b[:, 2]-box_b[:, 0]) *
-              (box_b[:, 3]-box_b[:, 1])).unsqueeze(0).expand_as(inter)  # [A,B]
+    area_a = ((box_a[:, 2] - box_a[:, 0]) *
+              (box_a[:, 3] - box_a[:, 1])).unsqueeze(1).expand_as(inter)  # [A,B]
+    area_b = ((box_b[:, 2] - box_b[:, 0]) *
+              (box_b[:, 3] - box_b[:, 1])).unsqueeze(0).expand_as(inter)  # [A,B]
     union = area_a + area_b - inter
     return inter / union  # [A,B]
 
@@ -98,7 +98,7 @@ def match(threshold, truths, priors, variances, labels, landms, loc_t, conf_t, l
     overlap, encode the bounding boxes, then return the matched indices
     corresponding to both confidence and location preds.
     Args:
-        threshold: (float) The overlap threshold used when mathing boxes.
+        threshold: (float) The overlap threshold used when mathing boxes. 大于该阈值的才会作为分类正样本
         truths: (tensor) Ground truth boxes, Shape: [num_obj, 4].
         priors: (tensor) Prior boxes from priorbox layers, Shape: [n_priors,4].
         variances: (tensor) Variances corresponding to each prior coord,
@@ -112,17 +112,18 @@ def match(threshold, truths, priors, variances, labels, landms, loc_t, conf_t, l
     Return:
         The matched indices corresponding to 1)location 2)confidence 3)landm preds.
     """
-    # jaccard index
+    # jaccard index ， 杰卡德相似度,
     overlaps = jaccard(
         truths,
         point_form(priors)
-    )
+    )  # [14, 16800]
     # (Bipartite Matching)
-    # [1,num_objects] best prior for each ground truth
-    best_prior_overlap, best_prior_idx = overlaps.max(1, keepdim=True)
+    # [1,num_objects] best prior for each ground truth， 得到GT个priors
+    # 如图中有14个人脸，best_prior_overlap.shape == [14, 1]
+    best_prior_overlap, best_prior_idx = overlaps.max(1, keepdim=True)  # 找出与GT框重叠度最高的那些priors
 
     # ignore hard gt
-    valid_gt_idx = best_prior_overlap[:, 0] >= 0.2
+    valid_gt_idx = best_prior_overlap[:, 0] >= 0.2  # 重叠度一定要大于0.2，否则过滤掉
     best_prior_idx_filter = best_prior_idx[valid_gt_idx, :]
     if best_prior_idx_filter.shape[0] <= 0:
         loc_t[idx] = 0
@@ -130,25 +131,38 @@ def match(threshold, truths, priors, variances, labels, landms, loc_t, conf_t, l
         return
 
     # [1,num_priors] best ground truth for each prior
-    best_truth_overlap, best_truth_idx = overlaps.max(0, keepdim=True)
+    # overlaps.shape : [14, 16800] 即每个anchors与GT之间的重叠度
+    # best_truth_overlap 是每个anchors 与 所有GT中重叠度最高的那个GT的重叠度，大部分都是0
+    # best_truth_idx 是 每个anchors 对应的GT的idx，如总共有14个人脸，则值域为[0,13]
+    best_truth_overlap, best_truth_idx = overlaps.max(0, keepdim=True)  # 每个anchors与哪一个GT bbox的重叠度最高
     best_truth_idx.squeeze_(0)
     best_truth_overlap.squeeze_(0)
     best_prior_idx.squeeze_(1)
     best_prior_idx_filter.squeeze_(1)
     best_prior_overlap.squeeze_(1)
-    best_truth_overlap.index_fill_(0, best_prior_idx_filter, 2)  # ensure best prior
+    best_truth_overlap.index_fill_(0, best_prior_idx_filter, 2)  # ensure best prior 重叠度设置为2，
     # TODO refactor: index  best_prior_idx with long tensor
-    # ensure every gt matches with its prior of max overlap
-    for j in range(best_prior_idx.size(0)):     # 判别此anchor是预测哪一个boxes
-        best_truth_idx[best_prior_idx[j]] = j
-    matches = truths[best_truth_idx]            # Shape: [num_priors,4] 此处为每一个anchor对应的bbox取出来
-    conf = labels[best_truth_idx]               # Shape: [num_priors]      此处为每一个anchor对应的label取出来
-    conf[best_truth_overlap < threshold] = 0    # label as background   overlap<0.35的全部作为负样本
-    loc = encode(matches, priors, variances)
 
+    # ensure every gt matches with its prior of max overlap
+    # best_prior_idx 是与GT重叠度最高的那些anchors， 有几个GT，该变量长度就为几
+    # 这一段代码大部分情况是“不起作用的”，只是为了避免在计算best_truth_idx时，与计算best_prior_idx时出现冲突
+    # 这段代码逻辑是对N个GT进行for循环，找出每个GT对应的anchors：best_prior_idx[j]
+    # 然后这个anchors对应的GT不能有冲突，所以：best_truth_idx[best_prior_idx[j]] = j
+    for j in range(best_prior_idx.size(0)):  # 判别此anchor是预测哪一个GT bbox
+        best_truth_idx[best_prior_idx[j]] = j  # eg. best_prior_idx[0] 是 13509， j = 0
+
+    #
+    matches = truths[best_truth_idx]  # 为每一个anchors匹配GT，即该anchor与哪一个GT的重叠度最高
+    conf = labels[best_truth_idx]  # 为每一个anchors匹配分类类别，由于只有人脸1类，所以都是1
+
+    # 经过下一行代码：conf.sum()==44，即14个人脸的case里，有44个anchor与GT的 overlap>0.35
+    conf[best_truth_overlap < threshold] = 0  # overlap < 0.35   的作为分类负样本  ##### 重要 ####
+
+    loc = encode(matches, priors, variances)  # loc是真实标签与对应anchor之间的差异值，即需要优化的目标
     matches_landm = landms[best_truth_idx]
-    landm = encode_landm(matches_landm, priors, variances)
-    loc_t[idx] = loc    # [num_priors,4] encoded offsets to learn
+    landm = encode_landm(matches_landm, priors, variances)  # 同理，landm是模型优化的目标
+
+    loc_t[idx] = loc  # [num_priors,4] encoded offsets to learn
     conf_t[idx] = conf  # [num_priors] top class label for each prior
     landm_t[idx] = landm
 
@@ -166,15 +180,21 @@ def encode(matched, priors, variances):
         encoded boxes (tensor), Shape: [num_priors, 4]
     """
 
-    # dist b/t match center and prior's center
-    g_cxcy = (matched[:, :2] + matched[:, 2:])/2 - priors[:, :2]
+    # dist b/t match center and prior's center， match的值是GT，从dataset中来的
+    # bbox标签格式：xmin ymin width height
+    # priors格式为：anchor在原图尺寸的坐标，anchor的边长，值是经过归一化的，即除了边长的
+    # 因此(matched[:, :2] + matched[:, 2:])/2 得到中心点坐标
+    # 因此 (matched[:, :2] + matched[:, 2:])/2 - priors[:, :2] 表示 真实bbox与anchor的中心点偏移值
+    g_cxcy = (matched[:, :2] + matched[:, 2:]) / 2 - priors[:, :2]
     # encode variance
     g_cxcy /= (variances[0] * priors[:, 2:])
-    # match wh / prior wh
+
+    # 同理，计算真实bbox的长宽与anchor的长宽的差异； match wh / prior wh
     g_wh = (matched[:, 2:] - matched[:, :2]) / priors[:, 2:]
     g_wh = torch.log(g_wh) / variances[1]
     # return target for smooth_l1_loss
     return torch.cat([g_cxcy, g_wh], 1)  # [num_priors,4]
+
 
 def encode_landm(matched, priors, variances):
     """Encode the variances from the priorbox layers into the ground truth boxes
@@ -226,6 +246,7 @@ def decode(loc, priors, variances):
     boxes[:, 2:] += boxes[:, :2]
     return boxes
 
+
 def decode_landm(pre, priors, variances):
     """Decode landm from predictions using priors to undo
     the encoding we did for offset regression at train time.
@@ -255,7 +276,7 @@ def log_sum_exp(x):
         x (Variable(tensor)): conf_preds from conf layers
     """
     x_max = x.data.max()
-    return torch.log(torch.sum(torch.exp(x-x_max), 1, keepdim=True)) + x_max
+    return torch.log(torch.sum(torch.exp(x - x_max), 1, keepdim=True)) + x_max
 
 
 # Original author: Francisco Massa:
@@ -318,13 +339,11 @@ def nms(boxes, scores, overlap=0.5, top_k=200):
         # check sizes of xx1 and xx2.. after each iteration
         w = torch.clamp(w, min=0.0)
         h = torch.clamp(h, min=0.0)
-        inter = w*h
+        inter = w * h
         # IoU = i / (area(a) + area(b) - i)
         rem_areas = torch.index_select(area, 0, idx)  # load remaining areas)
         union = (rem_areas - inter) + area[i]
-        IoU = inter/union  # store result in iou
+        IoU = inter / union  # store result in iou
         # keep only elements with an IoU <= overlap
         idx = idx[IoU.le(overlap)]
     return keep, count
-
-

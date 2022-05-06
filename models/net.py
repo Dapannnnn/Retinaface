@@ -46,28 +46,30 @@ class SSH(nn.Module):
             leaky = 0.1
         self.conv3X3 = conv_bn_no_relu(in_channel, out_channel//2, stride=1)
 
-        self.conv5X5_1 = conv_bn(in_channel, out_channel//4, stride=1, leaky = leaky)
+        # conv5*5用2个卷积代替
+        self.conv5X5_1 = conv_bn(in_channel, out_channel//4, stride=1, leaky=leaky)
         self.conv5X5_2 = conv_bn_no_relu(out_channel//4, out_channel//4, stride=1)
 
+        # conv7*7 用3个卷积代替，第一个卷积是借用conv5*5的第一个3*3
         self.conv7X7_2 = conv_bn(out_channel//4, out_channel//4, stride=1, leaky = leaky)
         self.conv7x7_3 = conv_bn_no_relu(out_channel//4, out_channel//4, stride=1)
 
     def forward(self, input):
-        conv3X3 = self.conv3X3(input)
+        conv3X3 = self.conv3X3(input)  # 得到32个channel
 
         conv5X5_1 = self.conv5X5_1(input)
-        conv5X5 = self.conv5X5_2(conv5X5_1)
+        conv5X5 = self.conv5X5_2(conv5X5_1)   # 得到16个channel
 
         conv7X7_2 = self.conv7X7_2(conv5X5_1)
-        conv7X7 = self.conv7x7_3(conv7X7_2)
+        conv7X7 = self.conv7x7_3(conv7X7_2)     # 得到16个channel
 
-        out = torch.cat([conv3X3, conv5X5, conv7X7], dim=1)
+        out = torch.cat([conv3X3, conv5X5, conv7X7], dim=1)  # 拼接得到64个channel
         out = F.relu(out)
         return out
 
 class FPN(nn.Module):
     def __init__(self,in_channels_list,out_channels):
-        super(FPN,self).__init__()
+        super(FPN, self).__init__()
         leaky = 0
         if (out_channels <= 64):
             leaky = 0.1
@@ -82,10 +84,10 @@ class FPN(nn.Module):
         # names = list(input.keys())
         input = list(input.values())
 
-        output1 = self.output1(input[0])
-        output2 = self.output2(input[1])
-        output3 = self.output3(input[2])
-
+        output1 = self.output1(input[0])   # torch.Size([28, 64, 80, 80])     下降8倍，输入是640
+        output2 = self.output2(input[1])   # torch.Size([28, 128, 40, 40])    下降16倍
+        output3 = self.output3(input[2])   # torch.Size([28, 256, 20, 20])    下降32倍
+        # 上采样到相同尺寸，然后相加，相加之后经过卷积模块（self.merge2）
         up3 = F.interpolate(output3, size=[output2.size(2), output2.size(3)], mode="nearest")
         output2 = output2 + up3
         output2 = self.merge2(output2)
